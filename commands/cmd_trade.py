@@ -95,7 +95,7 @@ async def _mark(update: Update, ctx: ContextTypes.DEFAULT_TYPE, result: str):
     )
 
     # Today's summary
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     wins = bot.today_result_count("WIN")
     losses = bot.today_result_count("LOSS")
     total = wins + losses
@@ -114,7 +114,7 @@ async def cmd_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 No open trades right now.\n/log দিয়ে নতুন trade যোগ করো")
         return
     # Fetch live prices
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     lines = ["📋 OPEN TRADES", "━━━━━━━━━━━━━━━━━━━━━"]
     combined_unrealized = 0.0
     for t in trades:
