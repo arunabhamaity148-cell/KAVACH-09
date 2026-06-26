@@ -104,11 +104,18 @@ class KavachBot:
         await self.engine.start()
         log.info("Signal engine started")
 
-        # Start alert forwarder
-        asyncio.create_task(self._alert_forwarder())
+        # Start alert forwarder — ISSUE 5 FIX: keep reference for cancellation
+        self._forwarder_task = asyncio.create_task(self._alert_forwarder())
 
     async def stop(self) -> None:
         log.info("Stopping...")
+        # ISSUE 5 FIX: cancel alert forwarder task before stopping subsystems
+        if hasattr(self, "_forwarder_task") and self._forwarder_task:
+            self._forwarder_task.cancel()
+            try:
+                await self._forwarder_task
+            except asyncio.CancelledError:
+                pass
         await self.engine.stop()
         await self.bus.stop()
         await self.alerts.close()
@@ -254,7 +261,7 @@ async def _post_init(app: Application) -> None:
 
 
 async def _post_shutdown(app: Application) -> None:
-    bot: KavachBot | None = app.bot_data.get("bot")
+    bot: KavachBot | None = app.bot_data.get("kavach")   # ISSUE 5 FIX: was "bot"
     if bot:
         await bot.stop()
 
