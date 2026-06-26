@@ -157,6 +157,10 @@ class AlertManager:
         self.bot_token = TELEGRAM_BOT_TOKEN
         self.chat_id   = TELEGRAM_CHAT_ID
         self._session = None
+        # BUG-009 fix: Rate limiting — max 20 messages per minute to avoid Telegram 429
+        self._sent_timestamps: list[float] = []
+        self._rate_limit = 20       # max msgs per window
+        self._rate_window = 60.0    # seconds
 
     async def _get_session(self):
         if self._session is None:
@@ -173,6 +177,15 @@ class AlertManager:
         if not chat:
             log.warning("TELEGRAM_CHAT_ID not set — alert not sent")
             return False
+
+        # BUG-009 fix: Rate limit check
+        import time as _time
+        now = _time.time()
+        self._sent_timestamps = [t for t in self._sent_timestamps if now - t < self._rate_window]
+        if len(self._sent_timestamps) >= self._rate_limit:
+            log.warning(f"Rate limit hit — {len(self._sent_timestamps)} msgs in last {self._rate_window}s, dropping alert")
+            return False
+        self._sent_timestamps.append(now)
 
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {"chat_id": chat, "text": text, "disable_web_page_preview": True}
