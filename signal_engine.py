@@ -122,12 +122,15 @@ class SignalEngine:
                 try:
                     r = await strat.evaluate(pair, candles, trades, context)
                 except Exception as e:
-                    log.debug(f"{strat.key} on {pair.symbol}: {e}")
+                    log.warning(f"{strat.key} on {pair.symbol} evaluate() crashed: {e}", exc_info=True)
                     continue
                 if r and r.score >= SCORE_MIN:
                     results.append(r)
+                    log.info(f"✅ Signal: {pair.symbol} {r.direction} score={r.score} strategy={strat.key}")
                 elif r:
                     log.debug(f"{strat.key} on {pair.symbol}: score {r.score} < SCORE_MIN {SCORE_MIN} — skipped")
+                else:
+                    log.debug(f"{strat.key} on {pair.symbol}: returned None (conditions not met)")
 
         # ─── Dedupe: keep highest-scoring signal per (pair, direction) ──
         results.sort(key=lambda r: r.score, reverse=True)
@@ -208,6 +211,8 @@ class SignalEngine:
                     signals = await self.scan_once()
                     if signals:
                         log.info(f"Scan #{self._scan_count}: {len(signals)} new signal(s)")
+                    else:
+                        log.info(f"Scan #{self._scan_count}: 0 signals (check DEBUG logs for details)")
                 else:
                     log.debug("Scan paused — skipping")
             except asyncio.CancelledError:
