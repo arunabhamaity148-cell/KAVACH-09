@@ -115,7 +115,9 @@ class SignalEngine:
         for pair in pairs:
             candles, trades = await self._gather_pair_data(pair)
             if not candles:
+                log.debug(f"No candles for {pair.symbol} — skipping")
                 continue
+            log.debug(f"{pair.symbol}: {len(candles)} candles, {len(trades)} trades")
             for strat in self.strategies:
                 try:
                     r = await strat.evaluate(pair, candles, trades, context)
@@ -124,6 +126,8 @@ class SignalEngine:
                     continue
                 if r and r.score >= SCORE_MIN:
                     results.append(r)
+                elif r:
+                    log.debug(f"{strat.key} on {pair.symbol}: score {r.score} < SCORE_MIN {SCORE_MIN} — skipped")
 
         # ─── Dedupe: keep highest-scoring signal per (pair, direction) ──
         results.sort(key=lambda r: r.score, reverse=True)
