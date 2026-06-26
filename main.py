@@ -222,14 +222,34 @@ def build_application() -> Application:
     for h in handlers:
         app.add_handler(h)
 
+    # BUG-002 fix: Global error handler
+    app.add_error_handler(_error_handler)
+
     return app
+
+
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global error handler — logs exceptions and notifies user if possible."""
+    import traceback
+    err = context.error
+    tb = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+    log.error(f"Exception while handling update:\n{tb}")
+    # Try to notify the user
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                f"⚠️ একটি error হয়েছে। Admin-কে জানানো হয়েছে।\n"
+                f"Error: {type(err).__name__}: {str(err)[:200]}"
+            )
+        except Exception:
+            pass
 
 
 async def _post_init(app: Application) -> None:
     """Called after Application is built, before polling starts."""
     bot = KavachBot()
     await bot.start()
-    app.bot_data["bot"] = bot
+    app.bot_data["kavach"] = bot
     log.info(f"{BOT_NAME} ready — polling started")
 
 
@@ -252,17 +272,6 @@ def main() -> None:
     app = build_application()
     app.post_init = _post_init
     app.post_shutdown = _post_shutdown
-
-    # Graceful shutdown
-    def _handle_sig(*_):
-        log.info("Signal received — shutting down")
-        asyncio.create_task(app.stop())
-
-    try:
-        sig.signal(sig.SIGINT, _handle_sig)
-        sig.signal(sig.SIGTERM, _handle_sig)
-    except Exception:
-        pass   # Windows
 
     log.info("Starting Telegram polling (Ctrl+C to stop)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
