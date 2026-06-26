@@ -2,6 +2,10 @@
 KAVACH-09 — Market Data Commands
 =================================
 /price BTC   /funding   /liquidation   /etf
+
+ISSUE 3 FIX: get_ticker() now uses correct ?symbol= param (not /BTCUSDT path).
+ISSUE 4 FIX: VWAP pulled from bus.vwap() when bus is ready, else computed from candles.
+ISSUE 2 FIX: ATR pulled from bus.atr() when bus is ready, else computed from candles.
 """
 from __future__ import annotations
 
@@ -28,13 +32,14 @@ async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # Run fetches in parallel
-    ticker_task = asyncio.create_task(market_feed.get_ticker(pair))
-    candle_task = asyncio.create_task(market_feed.get_candles(pair, "5m", 100))
+    ticker_task  = asyncio.create_task(market_feed.get_ticker(pair))
+    candle_task  = asyncio.create_task(market_feed.get_candles(pair, "5m", 100))
     funding_task = asyncio.create_task(coinglass_feed.get_funding_rates())
     ticker, candles, funding_map = await asyncio.gather(
         ticker_task, candle_task, funding_task, return_exceptions=True
     )
-    if isinstance(ticker, Exception) or not ticker:
+
+    if isinstance(ticker, Exception) or not ticker or ticker.get("price", 0) == 0:
         await update.message.reply_text(f"❌ Failed to fetch ticker for {pair.symbol}")
         return
     if isinstance(candles, Exception):
@@ -43,14 +48,35 @@ async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         funding_map = {}
 
     price = ticker["price"]
-    vwap = session_vwap(candles) if candles else 0
-    vwap_dev = vwap_deviation_pct(price, vwap) if vwap else 0
-    atr = calculate_atr(candles, 14) if candles else 0
-    vol_band = volatility_band(atr, price) if atr else "unknown"
 
-    funding = funding_map.get(pair.symbol, {})
-    rate_pct = funding.get("rate_pct", 0)
-    next_ms = funding.get("next_funding_ms")
+    # ── ISSUE 2 & 4 FIX: prefer bus values, fall back to compute ──
+    bot = ctx.application.bot_data.get("kavach")
+    bus = bot.bus if bot else None
+
+    if bus and bus.is_connected:
+        atr  = bus.atr(pair.binance)
+        vwap = bus.vwap(pair.binance)
+        # If bus values are zero (not yet computed), compute from candles
+        if atr == 0 and candles:
+            atr = calculate_atr(candles, 14)
+        if vwap == 0 and candles:
+            vwap = session_vwap(candles)
+    else:
+        atr  = calculate_atr(candles, 14) if candles else 0
+        vwap = session_vwap(candles)      if candles else 0
+
+    vwap_dev = vwap_deviation_pct(price, vwap) if vwap else 0
+    vol_band = volatility_band(atr, price)      if atr  else "unknown"
+
+    # Funding rate — try bus first (ISSUE 1 FIX), then coinglass_feed result
+    if bus and bus.is_connected:
+        live_funding_rate = bus.funding_rate(pair.binance) * 100   # convert to %
+    else:
+        live_funding_rate = 0.0
+
+    funding     = funding_map.get(pair.symbol, {})
+    rate_pct    = live_funding_rate if live_funding_rate != 0 else funding.get("rate_pct", 0)
+    next_ms     = funding.get("next_funding_ms")
 
     if vwap_dev > 0.3:
         bias = "🔴 SHORT bias (extended above VWAP)"
@@ -66,7 +92,8 @@ async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📈 24h Change: {ticker['change_pct']:+.2f}% ({ticker['change_abs']:+.2f})\n"
         f"📊 24h Volume: ${ticker['volume']/1e9:.2f}B\n"
         f"🎯 VWAP      : ${vwap:,.2f} ({'above' if vwap_dev > 0 else 'below'} {abs(vwap_dev):.2f}%)\n"
-        f"💧 Funding   : {rate_pct:+.3f}% / 8h ({'neutral' if abs(rate_pct) < 0.04 else '⚠️ elevated'})\n"
+        f"💧 Funding   : {rate_pct:+.3f}% / 8h "
+        f"({'neutral' if abs(rate_pct) < 0.04 else '⚠️ elevated'})\n"
         f"📉 ATR-14(5m): ${atr:.2f} (volatility: {vol_band})\n\n"
         f"Signal bias: {bias}"
     )
@@ -83,7 +110,7 @@ async def cmd_funding(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     lines = ["💰 FUNDING RATES — CoinDCX Futures", "━━━━━━━━━━━━━━━━━━━━━"]
     high_short = []
-    low_long = []
+    low_long   = []
     for p in PAIRS:
         f = funding_map.get(p.symbol)
         if not f:
@@ -115,13 +142,12 @@ async def cmd_funding(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_liquidation(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from config import LIQ_CASCADE_THRESHOLD_USD
-    liq = await coinglass_feed.get_liquidations_last_hour()
-    total = liq.get("total_usd", 0)
+    liq        = await coinglass_feed.get_liquidations_last_hour()
+    total      = liq.get("total_usd", 0)
     long_total = liq.get("long_total", 0)
-    short_total = liq.get("short_total", 0)
-    bias = liq.get("bias_ratio", 0.5)
+    short_total= liq.get("short_total", 0)
+    bias       = liq.get("bias_ratio", 0.5)
 
-    # Categorise
     if total >= LIQ_CASCADE_THRESHOLD_USD:
         status = "🔴 EXTREME — cascade territory"
     elif total >= LIQ_CASCADE_THRESHOLD_USD * 0.5:
@@ -135,15 +161,14 @@ async def cmd_liquidation(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "💥 LIQUIDATIONS — Last 60 min",
         "━━━━━━━━━━━━━━━━━━━━━",
         f"Total market : ${total/1e6:.1f}M",
-        f"Long liq     : ${long_total/1e6:.1f}M ({bias*100:.0f}%)" if total else "Long liq     : n/a",
-        f"Short liq    : ${short_total/1e6:.1f}M ({(1-bias)*100:.0f}%)" if total else "Short liq    : n/a",
+        (f"Long liq     : ${long_total/1e6:.1f}M ({bias*100:.0f}%)" if total else "Long liq     : n/a"),
+        (f"Short liq    : ${short_total/1e6:.1f}M ({(1-bias)*100:.0f}%)" if total else "Short liq    : n/a"),
         "",
         f"⚠️ Threshold: ${LIQ_CASCADE_THRESHOLD_USD/1e6:.0f}M (cascade trigger)",
         f"Status: {status}",
         "",
         f"Source: {liq.get('source', 'unknown')}",
     ]
-    # Per-pair breakdown if available
     by_pair = liq.get("by_pair", {})
     if by_pair:
         lines.append("\nBy pair:")
@@ -157,13 +182,13 @@ async def cmd_liquidation(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_etf(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    etf = await etf_feed.get_etf_flow()
-    net = etf.get("net_flow", 0)
-    bias = etf.get("bias", "NEUTRAL")
-    bias_emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(bias, "🟡")
+    etf       = await etf_feed.get_etf_flow()
+    net       = etf.get("net_flow", 0)
+    bias      = etf.get("bias", "NEUTRAL")
+    bias_emoji= {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(bias, "🟡")
     by_issuer = etf.get("by_issuer", {})
-    cum_7d = etf.get("cumulative_7d", 0)
-    us_h = etf.get("us_session_in_hours", 0)
+    cum_7d    = etf.get("cumulative_7d", 0)
+    us_h      = etf.get("us_session_in_hours", 0)
 
     lines = [
         "🏛️ BTC ETF FLOW — SoSoValue",
