@@ -14,7 +14,7 @@ from verifier import verify_manual_idea
 
 
 async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     await update.message.reply_text("🔍 Manual scan চলছে... (5 pairs × 5 strategies)")
     signals = await bot.engine.scan_once()
     if not signals:
@@ -48,7 +48,7 @@ async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Unknown pair: {ctx.args[0]}")
         return
 
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     r = bot.engine.latest_for(pair.symbol)
     if not r:
         # Try a fresh scan for this pair
