@@ -1,0 +1,44 @@
+# KAVACH-09 — systemd service file
+# ==================================
+# Install:
+#   sudo cp kavach09.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable kavach09
+#   sudo systemctl start kavach09
+#
+# Logs:
+#   sudo journalctl -u kavach09 -f
+#
+# Status:
+#   sudo systemctl status kavach09
+
+[Unit]
+Description=KAVACH-09 Signal Intelligence Bot (CoinDCX Futures)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kavach
+Group=kavach
+WorkingDirectory=/opt/kavach09
+EnvironmentFile=/opt/kavach09/.env
+ExecStart=/opt/kavach09/venv/bin/python /opt/kavach09/main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=80%
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/kavach09
+
+[Install]
+WantedBy=multi-user.target
