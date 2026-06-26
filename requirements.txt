@@ -13,3 +13,13 @@ numpy==1.26.4
 
 # Environment variables
 python-dotenv==1.0.1
+
+# AI Providers (BUG-006 fix: added missing deps)
+groq==0.9.0
+google-generativeai==0.7.2
+
+# HTTP requests (sync, used by some scrapers)
+requests==2.32.3
+
+# Optional: Bayesian optimization (if used)
+# optuna==3.6.1
