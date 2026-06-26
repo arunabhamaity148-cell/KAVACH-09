@@ -14,7 +14,7 @@ from config import BOT_NAME
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     msg = (
         f"⚔️ {BOT_NAME} চালু হয়েছে\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -29,7 +29,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     today_signals = bot.today_signal_count()
     today_trades  = bot.today_trade_count()
     today_wins    = bot.today_result_count("WIN")
@@ -52,7 +52,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     bot.engine.pause()
     await update.message.reply_text(
         "⏸️ Signal scan paused\n"
@@ -61,7 +61,7 @@ async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     bot.engine.resume()
     await update.message.reply_text("▶️ Signal scan resumed")
 
@@ -72,7 +72,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_ping(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Quick health probe — useful for debugging."""
-    bot = ctx.application.bot_data["bot"]
+    bot = ctx.application.bot_data["kavach"]
     await update.message.reply_text(
         f"🏓 pong\n"
         f"WS: {'✅' if bot.bus and bot.bus.is_connected else '❌'}\n"
