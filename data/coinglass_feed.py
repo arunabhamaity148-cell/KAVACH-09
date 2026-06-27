@@ -18,9 +18,7 @@ Liquidation logic:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-import time as _time
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -144,123 +142,78 @@ def time_to_next_funding_ms(next_ms: int | None) -> str:
     return f"{h}h {m}m"
 
 
+# LIQUIDATION DATA
 # ════════════════════════════════════════════════════════════════════
-# LIQUIDATION DATA  — Binance free public endpoint
+# Source: Binance !forceOrder@arr WebSocket stream (public, no API key)
+# This stream is subscribed in MarketFeedBus (market_feed.py).
+# get_liquidations_last_hour() reads from the bus's _liq_events buffer.
+# No REST call needed — data accumulates in memory as events arrive.
 # ════════════════════════════════════════════════════════════════════
+
+# Module-level bus reference — set by KavachBot.start() in main.py
+_bus = None
+
+def set_bus(bus) -> None:
+    """Called from main.py after bus is created so liquidation feed can read it."""
+    global _bus
+    _bus = bus
+
 
 async def get_liquidations_last_hour() -> dict[str, Any]:
     """
-    Returns last-1-hour liquidation summary across all tracked pairs.
-    Uses in-memory cache (5 min TTL) to avoid hammering Binance.
+    Returns last-1-hour liquidation summary from the WS bus buffer.
+    No API key required — data comes from !forceOrder@arr WS stream.
 
     Return schema:
         {
             "total_usd":   float,
-            "long_total":  float,   # long positions liquidated
-            "short_total": float,   # short positions liquidated
-            "bias_ratio":  float,   # long_liq / total  (>0.5 = longs getting wiped)
-            "by_pair":     {"BTC-USDT": {"long_usd": .., "short_usd": .., "total_usd": ..}},
+            "long_total":  float,   # long positions liquidated (side=SELL)
+            "short_total": float,   # short positions liquidated (side=BUY)
+            "bias_ratio":  float,   # long_liq / total (>0.5 = longs wiped)
+            "by_pair":     {"BTC-USDT": {"long_usd":.., "short_usd":.., "total_usd":..}},
             "source":      str,
-            "window_min":  int,     # actual window used (minutes)
+            "window_min":  int,
+            "count":       int,
         }
     """
-    global _liq_cache, _liq_cache_ts
-
-    # Serve from cache if fresh
-    now = _time.time()
-    if _liq_cache and (now - _liq_cache_ts) < _LIQ_CACHE_TTL:
-        return _liq_cache
-
-    # CoinGlass first (if key present)
+    # CoinGlass if key present
     if COINGLASS_API_KEY:
         try:
-            result = await _coinglass_liquidations()
-            _liq_cache    = result
-            _liq_cache_ts = now
-            return result
+            return await _coinglass_liquidations()
         except Exception as e:
-            log.warning(f"CoinGlass liq failed: {e} — using Binance")
+            log.warning(f"CoinGlass liq failed: {e} — using WS bus")
 
-    # ── Binance free endpoints ───────────────────────────────────
-    # Strategy:
-    #   1. allForceOrders (all symbols, limit 200) — broadest picture
-    #   2. per-symbol forceOrders for each tracked pair — more reliable
-    # Merge both, deduplicate by (symbol, time).
+    # Read from WebSocket bus buffer
+    if _bus is None:
+        return _empty_liq("bus not initialised yet")
 
-    try:
-        result = await _binance_liquidations_merged()
-        _liq_cache    = result
-        _liq_cache_ts = now
-        return result
-    except Exception as e:
-        log.error(f"Binance liquidation fetch failed: {e}")
-        # Return stale cache if available, else empty
-        if _liq_cache:
-            stale = dict(_liq_cache)
-            stale["source"] = stale.get("source", "") + " (cached — fetch failed)"
-            return stale
-        return _empty_liq("Binance fetch failed")
+    events = _bus.liquidations(window_seconds=3600)
 
+    if not events:
+        return _empty_liq(
+            "WS buffer empty — bot recently started. "
+            "Liquidation events accumulate over time. Retry in a few minutes."
+        )
 
-async def _binance_liquidations_merged() -> dict[str, Any]:
-    """
-    Binance /fapi/v1/allForceOrders is deprecated (returns 400).
-    Use per-symbol /fapi/v1/forceOrders for each tracked pair.
-    Filters to last 1 hour, aggregates USD value.
-    """
-    one_hour_ago_ms = int((_time.time() - 3600) * 1000)
-    pair_lookup     = {p.binance: p.symbol for p in PAIRS}
-
-    async def _fetch_symbol(sym: str) -> list[dict]:
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(
-                    f"{BINANCE_FAPI}/fapi/v1/forceOrders",
-                    params={"symbol": sym, "startTime": one_hour_ago_ms, "limit": 100},
-                    timeout=10,
-                ) as r:
-                    if r.status == 200:
-                        return await r.json()
-                    body = await r.text()
-                    log.warning(f"forceOrders {sym} HTTP {r.status}: {body[:80]}")
-                    return []
-        except Exception as e:
-            log.debug(f"forceOrders {sym}: {e}")
-            return []
-
-    results = await asyncio.gather(
-        *[_fetch_symbol(p.binance) for p in PAIRS],
-        return_exceptions=True,
-    )
-
-    all_orders: list[dict] = []
-    for res in results:
-        if isinstance(res, list):
-            all_orders.extend(res)
-
-    log.debug(f"forceOrders total: {len(all_orders)} orders in last 1h")
-
-    # ── Aggregate ───────────────────────────────────────────────
+    pair_lookup = {p.binance: p.symbol for p in PAIRS}
     by_pair: dict[str, dict[str, float]] = defaultdict(
         lambda: {"long_usd": 0.0, "short_usd": 0.0, "total_usd": 0.0}
     )
     long_total  = 0.0
     short_total = 0.0
 
-    for o in all_orders:
-        sym = o.get("symbol", "")
-        if sym not in pair_lookup:
+    for e in events:
+        sym   = e.get("symbol", "")
+        pname = pair_lookup.get(sym)
+        if not pname:
             continue
-        side  = o.get("side", "").upper()
-        price = float(o.get("averagePrice") or o.get("price", 0))
-        qty   = float(o.get("executedQty") or o.get("origQty", 0))
-        usd   = price * qty
-        pname = pair_lookup[sym]
+        side = e.get("side", "").upper()
+        usd  = float(e.get("usd", 0))
 
-        if side == "SELL":
+        if side == "SELL":          # long position liquidated
             by_pair[pname]["long_usd"]  += usd
             long_total  += usd
-        elif side == "BUY":
+        elif side == "BUY":         # short position liquidated
             by_pair[pname]["short_usd"] += usd
             short_total += usd
         by_pair[pname]["total_usd"] += usd
@@ -272,9 +225,9 @@ async def _binance_liquidations_merged() -> dict[str, Any]:
         "short_total": short_total,
         "bias_ratio":  long_total / total if total > 0 else 0.5,
         "by_pair":     dict(by_pair),
-        "source":      "Binance public (forceOrders per-symbol)",
+        "source":      "Binance !forceOrder@arr WebSocket (real-time, no API key)",
         "window_min":  60,
-        "count":       len(all_orders),
+        "count":       len(events),
     }
 
 
@@ -306,3 +259,4 @@ def _empty_liq(reason: str = "no data") -> dict[str, Any]:
         "bias_ratio": 0.5, "by_pair": {}, "window_min": 60, "count": 0,
         "source": f"unavailable ({reason})",
     }
+
