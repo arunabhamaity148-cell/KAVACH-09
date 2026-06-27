@@ -42,9 +42,14 @@ class VwapReclaimStrategy(BaseStrategy):
 
         direction = "LONG" if long_reclaim else "SHORT"
 
-        # Volume rising across the 3 candles
-        vols = [c0["volume"], c1["volume"], c2["volume"]]
-        volume_rising = vols[2] > vols[1] > vols[0] and vols[2] > sum(vols) / 3
+        # Volume check — use closed candles only (c2 may be in-progress)
+        closed = [c for c in candles[-4:] if c.get("closed", True)]
+        if len(closed) >= 3:
+            vols = [closed[-3]["volume"], closed[-2]["volume"], closed[-1]["volume"]]
+        else:
+            vols = [c0["volume"], c1["volume"], c2["volume"]]
+        # BUG-12 fix: relaxed from strict 3-candle monotonic to just latest > prev
+        volume_rising = vols[2] > vols[1] and vols[2] > sum(vols) / 3
         avg_vol = sum(c["volume"] for c in candles[-20:]) / 20
         volume_strong = vols[2] > avg_vol
 
