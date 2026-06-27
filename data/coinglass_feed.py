@@ -209,13 +209,14 @@ async def _binance_liquidations_merged() -> dict[str, Any]:
     """
     one_hour_ago_ms = int((_time.time() - 3600) * 1000)
 
-    # ── Fetch 1: allForceOrders (all symbols in one shot) ───────
+    # ── Fetch 1: allForceOrders (no symbol filter, no limit param) ──
+    # Binance docs: allForceOrders does NOT support `limit` param.
+    # It returns last ~20 min of liquidations across all symbols.
     all_orders: list[dict] = []
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 f"{BINANCE_FAPI}/fapi/v1/allForceOrders",
-                params={"limit": 200},
                 timeout=12,
             ) as r:
                 if r.status == 200:
@@ -223,7 +224,8 @@ async def _binance_liquidations_merged() -> dict[str, Any]:
                     all_orders.extend(data)
                     log.debug(f"allForceOrders: {len(data)} records")
                 else:
-                    log.warning(f"allForceOrders HTTP {r.status}")
+                    body = await r.text()
+                    log.warning(f"allForceOrders HTTP {r.status}: {body[:100]}")
     except Exception as e:
         log.warning(f"allForceOrders failed: {e}")
 
