@@ -5,23 +5,21 @@ Session = UTC day (resets at 00:00 UTC = 05:30 IST).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 
 def _session_key(ts: str | int | float, reset_utc_hour: int = 0) -> str:
-    """Return YYYY-MM-DD for the current VWAP session."""
+    """Return YYYY-MM-DD for the current VWAP session. BUG-10 fix: proper timedelta."""
     if isinstance(ts, str):
-        # ISO 8601 expected
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     elif isinstance(ts, (int, float)):
-        # ms or s epoch
         ts_s = ts / 1000 if ts > 1e12 else ts
         dt = datetime.fromtimestamp(ts_s, tz=timezone.utc)
     else:
         dt = datetime.now(timezone.utc)
     if dt.hour < reset_utc_hour:
-        dt = dt.replace(day=dt.day - 1) if dt.day > 1 else dt
+        dt = dt - timedelta(days=1)   # BUG-10 fix: was broken dt.replace(day=day-1)
     return dt.strftime("%Y-%m-%d")
 
 
