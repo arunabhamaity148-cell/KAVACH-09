@@ -277,8 +277,8 @@ class MarketFeedBus:
         self._vwaps: dict[str, float] = {p.binance: 0.0 for p in self.pairs}
 
         # Liquidation buffer — from !forceOrder@arr stream (public, no key)
-        # Stores last 2 hours of liquidation events as raw dicts
-        self._liq_events: deque = deque(maxlen=5000)   # ~2h of events at peak vol
+        self._liq_events: deque = deque(maxlen=5000)
+        self._tracked_syms: set[str] = {p.binance for p in self.pairs}  # BUG-18 fix
 
         self._latency_ms = 0.0
 
@@ -346,13 +346,16 @@ class MarketFeedBus:
             self._ws = ws
             log.info(f"WS connected — {len(self.pairs)} pairs, {len(streams)} streams")
             self._ready.set()
+            self._parse_errors = 0   # BUG-27 fix: track parse errors
             async for raw in ws:
                 if not self._running:
                     break
                 try:
                     self._handle(json.loads(raw))
                 except Exception as e:
-                    log.debug(f"WS msg parse err: {e}")
+                    self._parse_errors += 1
+                    if self._parse_errors % 50 == 1:   # BUG-27 fix: warn every 50 errors
+                        log.warning(f"WS parse error #{self._parse_errors}: {e}")
 
     # ─── message dispatcher ─────────────────────────────────────
     def _handle(self, msg: dict) -> None:
@@ -432,13 +435,15 @@ class MarketFeedBus:
     def _handle_force_order(self, data: dict) -> None:
         """
         Binance !forceOrder@arr stream — public, no API key needed.
-        Payload 'o' contains the liquidation order details.
         side=SELL → long liquidated | side=BUY → short liquidated
+        BUG-18 fix: only store events for tracked pairs.
         """
-        o = data.get("o", data)   # some payloads wrap in "o", some don't
-        sym   = o.get("s", "")
-        side  = o.get("S", "").upper()   # "BUY" or "SELL"
-        price = float(o.get("ap", 0) or o.get("p", 0))   # average price
+        o = data.get("o", data)
+        sym = o.get("s", "")
+        if sym not in self._tracked_syms:   # BUG-18 fix
+            return
+        side  = o.get("S", "").upper()
+        price = float(o.get("ap", 0) or o.get("p", 0))
         qty   = float(o.get("q", 0))
         ts    = int(o.get("T", time.time() * 1000))
         usd   = price * qty
@@ -495,11 +500,16 @@ async def warm_start(bus: MarketFeedBus) -> None:
     async def _fill(p: Pair):
         c = await get_candles(p, bus.interval, CANDLE_HISTORY)
         if c:
-            bus._candles[p.binance]     = c
-            bus._last_prices[p.binance] = c[-1]["close"]
-            if len(c) >= 14:
-                bus._atrs[p.binance]  = calculate_atr(c, 14)   # ISSUE 2 FIX
-                bus._vwaps[p.binance] = session_vwap(c)         # ISSUE 4 FIX
+            # BUG-28 fix: merge with WS-populated candles instead of overwrite
+            existing    = bus._candles.get(p.binance, [])
+            existing_ts = {x["timestamp"] for x in existing}
+            new_only    = [x for x in c if x["timestamp"] not in existing_ts]
+            merged      = c + new_only   # REST history + any fresh WS candles
+            bus._candles[p.binance]     = merged
+            bus._last_prices[p.binance] = merged[-1]["close"]
+            if len(merged) >= 14:
+                bus._atrs[p.binance]  = calculate_atr(merged, 14)
+                bus._vwaps[p.binance] = session_vwap(merged)
                 log.debug(
                     f"{p.symbol} warm-start: ATR={bus._atrs[p.binance]:.2f}"
                     f" VWAP={bus._vwaps[p.binance]:.2f}"
