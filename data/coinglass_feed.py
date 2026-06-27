@@ -204,69 +204,41 @@ async def get_liquidations_last_hour() -> dict[str, Any]:
 
 async def _binance_liquidations_merged() -> dict[str, Any]:
     """
-    Fetches from both allForceOrders and per-symbol forceOrders,
-    deduplicates, filters to last 1 hour, aggregates USD value.
+    Binance /fapi/v1/allForceOrders is deprecated (returns 400).
+    Use per-symbol /fapi/v1/forceOrders for each tracked pair.
+    Filters to last 1 hour, aggregates USD value.
     """
     one_hour_ago_ms = int((_time.time() - 3600) * 1000)
-
-    # ── Fetch 1: allForceOrders (no symbol filter, no limit param) ──
-    # Binance docs: allForceOrders does NOT support `limit` param.
-    # It returns last ~20 min of liquidations across all symbols.
-    all_orders: list[dict] = []
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
-                f"{BINANCE_FAPI}/fapi/v1/allForceOrders",
-                timeout=12,
-            ) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    all_orders.extend(data)
-                    log.debug(f"allForceOrders: {len(data)} records")
-                else:
-                    body = await r.text()
-                    log.warning(f"allForceOrders HTTP {r.status}: {body[:100]}")
-    except Exception as e:
-        log.warning(f"allForceOrders failed: {e}")
-
-    # ── Fetch 2: per-symbol forceOrders for each tracked pair ────
-    pair_lookup = {p.binance: p.symbol for p in PAIRS}
+    pair_lookup     = {p.binance: p.symbol for p in PAIRS}
 
     async def _fetch_symbol(sym: str) -> list[dict]:
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(
                     f"{BINANCE_FAPI}/fapi/v1/forceOrders",
-                    params={"symbol": sym, "limit": 50, "startTime": one_hour_ago_ms},
+                    params={"symbol": sym, "startTime": one_hour_ago_ms, "limit": 100},
                     timeout=10,
                 ) as r:
                     if r.status == 200:
                         return await r.json()
+                    body = await r.text()
+                    log.warning(f"forceOrders {sym} HTTP {r.status}: {body[:80]}")
                     return []
         except Exception as e:
             log.debug(f"forceOrders {sym}: {e}")
             return []
 
-    per_sym_results = await asyncio.gather(
+    results = await asyncio.gather(
         *[_fetch_symbol(p.binance) for p in PAIRS],
         return_exceptions=True,
     )
-    for res in per_sym_results:
+
+    all_orders: list[dict] = []
+    for res in results:
         if isinstance(res, list):
             all_orders.extend(res)
 
-    # ── Deduplicate by (symbol, time) ───────────────────────────
-    seen: set[tuple[str, int]] = set()
-    unique: list[dict] = []
-    for o in all_orders:
-        key = (o.get("symbol", ""), int(o.get("time", 0)))
-        if key not in seen:
-            seen.add(key)
-            unique.append(o)
-
-    # ── Filter to last 1 hour ───────────────────────────────────
-    recent = [o for o in unique if int(o.get("time", 0)) >= one_hour_ago_ms]
-    log.debug(f"Liquidations: {len(unique)} total, {len(recent)} in last 1h")
+    log.debug(f"forceOrders total: {len(all_orders)} orders in last 1h")
 
     # ── Aggregate ───────────────────────────────────────────────
     by_pair: dict[str, dict[str, float]] = defaultdict(
@@ -275,45 +247,34 @@ async def _binance_liquidations_merged() -> dict[str, Any]:
     long_total  = 0.0
     short_total = 0.0
 
-    for o in recent:
+    for o in all_orders:
         sym = o.get("symbol", "")
         if sym not in pair_lookup:
-            continue   # only count tracked pairs
-
-        # Binance convention:
-        #   side=SELL → forced SELL (long position liquidated) → long_liq
-        #   side=BUY  → forced BUY  (short position liquidated) → short_liq
+            continue
         side  = o.get("side", "").upper()
         price = float(o.get("averagePrice") or o.get("price", 0))
         qty   = float(o.get("executedQty") or o.get("origQty", 0))
         usd   = price * qty
         pname = pair_lookup[sym]
 
-        if side == "SELL":          # long liquidated
+        if side == "SELL":
             by_pair[pname]["long_usd"]  += usd
             long_total  += usd
-        elif side == "BUY":         # short liquidated
+        elif side == "BUY":
             by_pair[pname]["short_usd"] += usd
             short_total += usd
         by_pair[pname]["total_usd"] += usd
 
     total = long_total + short_total
-
-    # Determine source label
-    if all_orders:
-        source = "Binance public (allForceOrders + forceOrders)"
-    else:
-        source = "Binance public (forceOrders per-symbol)"
-
     return {
         "total_usd":   total,
         "long_total":  long_total,
         "short_total": short_total,
         "bias_ratio":  long_total / total if total > 0 else 0.5,
         "by_pair":     dict(by_pair),
-        "source":      source,
+        "source":      "Binance public (forceOrders per-symbol)",
         "window_min":  60,
-        "count":       len(recent),
+        "count":       len(all_orders),
     }
 
 
