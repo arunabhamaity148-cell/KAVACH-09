@@ -38,11 +38,32 @@ def format_signal_alert(r: StrategyResult, signal_id: int | None = None) -> str:
         "price_structure":  "Price Structure",
         "funding_neutral":  "Funding Neutral",
     }
-    detail_keys = list(r.condition_details.keys())
-    for i, (k, met) in enumerate(r.conditions.items()):
-        mark = "✅" if met else "❌"
+    # BUG-09 fix: map condition keys to their matching detail keys explicitly
+    DETAIL_KEY_FOR_CONDITION = {
+        "cvd_divergence":   "cvd_bias",
+        "vwap_extended":    "vwap_dev_pct",
+        "volume_declining": "volume_vs_avg",
+        "price_structure":  "price_move",
+        "funding_neutral":  "funding_rate",
+        # S2 VWAP Reclaim
+        "volume_rising":    "volume_vs_avg",
+        "volume_strong":    "volume_vs_avg",
+        "price_reclaim":    "price_move",
+        # S3 Funding Fade
+        "funding_extreme":  "funding_rate",
+        "price_reversal":   "price_move",
+        # S4 Liquidation
+        "cascade_detected": "total_usd",
+        "one_sided":        "bias_ratio",
+        # S5 ETF
+        "etf_signal":       "net_flow",
+        "flow_sustained":   "cumulative_7d",
+    }
+    for k, met in r.conditions.items():
+        mark  = "✅" if met else "❌"
         label = label_map.get(k, k.replace("_", " ").title())
-        detail = r.condition_details.get(detail_keys[i] if i < len(detail_keys) else k, "")
+        detail_key = DETAIL_KEY_FOR_CONDITION.get(k, k)
+        detail = r.condition_details.get(detail_key, r.condition_details.get(k, ""))
         cond_lines.append(f"{mark} {label:<20} : {detail}")
 
     # Warnings
