@@ -276,6 +276,10 @@ class MarketFeedBus:
         # ISSUE 4 FIX — session VWAP per symbol, recomputed on each closed kline
         self._vwaps: dict[str, float] = {p.binance: 0.0 for p in self.pairs}
 
+        # Liquidation buffer — from !forceOrder@arr stream (public, no key)
+        # Stores last 2 hours of liquidation events as raw dicts
+        self._liq_events: deque = deque(maxlen=5000)   # ~2h of events at peak vol
+
         self._latency_ms = 0.0
 
     # ─── lifecycle ──────────────────────────────────────────────
@@ -331,6 +335,10 @@ class MarketFeedBus:
             # ISSUE 1 FIX: markPrice stream carries funding rate
             streams.append(f"{sym}@markPrice")
 
+        # Global liquidation stream — public, no API key required
+        # Pushes ALL liquidation orders across all USDT-M futures symbols
+        streams.append("!forceOrder@arr")
+
         url = f"{BINANCE_WS}?streams=" + "/".join(streams)
         async with websockets.connect(
             url, ping_interval=15, ping_timeout=10, close_timeout=5, max_size=2**22
@@ -358,7 +366,9 @@ class MarketFeedBus:
         elif "@kline_" in stream:
             self._handle_kline(stream, data)
         elif "@markPrice" in stream:
-            self._handle_mark_price(stream, data)    # ISSUE 1 FIX
+            self._handle_mark_price(stream, data)
+        elif stream == "!forceOrder@arr" or "forceOrder" in stream:
+            self._handle_force_order(data)
 
     def _handle_trade(self, stream: str, data: dict) -> None:
         sym = stream.split("@")[0].upper()
@@ -412,12 +422,33 @@ class MarketFeedBus:
         sym = stream.split("@")[0].upper()
         if sym not in self._funding_rates:
             return
-        raw_rate = data.get("r")   # "r" = lastFundingRate in markPrice stream
+        raw_rate = data.get("r")
         if raw_rate is not None:
             try:
                 self._funding_rates[sym] = float(raw_rate)
             except (ValueError, TypeError):
                 pass
+
+    def _handle_force_order(self, data: dict) -> None:
+        """
+        Binance !forceOrder@arr stream — public, no API key needed.
+        Payload 'o' contains the liquidation order details.
+        side=SELL → long liquidated | side=BUY → short liquidated
+        """
+        o = data.get("o", data)   # some payloads wrap in "o", some don't
+        sym   = o.get("s", "")
+        side  = o.get("S", "").upper()   # "BUY" or "SELL"
+        price = float(o.get("ap", 0) or o.get("p", 0))   # average price
+        qty   = float(o.get("q", 0))
+        ts    = int(o.get("T", time.time() * 1000))
+        usd   = price * qty
+        if usd > 0:
+            self._liq_events.append({
+                "symbol": sym,
+                "side":   side,
+                "usd":    usd,
+                "time":   ts,
+            })
 
     # ─── public read API ────────────────────────────────────────
     def tape(self, binance_sym: str) -> list[dict]:
@@ -440,6 +471,11 @@ class MarketFeedBus:
     def vwap(self, binance_sym: str) -> float:
         """ISSUE 4 FIX: session VWAP computed from closed klines."""
         return self._vwaps.get(binance_sym, 0.0)
+
+    def liquidations(self, window_seconds: int = 3600) -> list[dict]:
+        """Return liquidation events from the last N seconds (default 1h)."""
+        cutoff = time.time() * 1000 - window_seconds * 1000
+        return [e for e in self._liq_events if e["time"] >= cutoff]
 
     @property
     def latency_ms(self) -> float:
