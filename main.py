@@ -29,7 +29,7 @@ from telegram.ext import (
 )
 
 from config import (
-    BOT_NAME, BOT_VERSION, IST_OFFSET_HOURS, TELEGRAM_BOT_TOKEN,
+    BOT_NAME, BOT_VERSION, IST_OFFSET_HOURS, TELEGRAM_BOT_TOKEN, SCORE_MIN,
 )
 from database import init_db, get_trades_since, get_signals_since
 from data.market_feed import MarketFeedBus, warm_start
@@ -123,50 +123,56 @@ class KavachBot:
 
     # ─── forwards new signals from engine → Telegram ─────────────
     async def _alert_forwarder(self) -> None:
-        seen_ids: set[int] = set()
+        from collections import deque
+        seen_ids: deque = deque(maxlen=500)   # BUG-08 fix: bounded
         log.info("Alert forwarder started")
         while True:
             try:
-                # Pick up the latest signal per pair if score high & cooldown ok
                 for r in self.engine.latest_signals():
                     sig_id = r.extra.get("signal_id")
                     if sig_id and sig_id in seen_ids:
                         continue
-                    if r.score < 75:    # only alert on MEDIUM or higher
+                    if r.score < SCORE_MIN:
                         continue
                     if not self.engine.should_alert(r.pair, r.direction):
                         continue
                     ok = await self.alerts.send_signal(r, sig_id)
-                    if ok and sig_id:
-                        seen_ids.add(sig_id)
-                    log.info(f"Alert sent: {r.pair} {r.direction} score={r.score}")
+                    if ok:
+                        self.engine.mark_alerted(r.pair, r.direction)  # BUG-06 fix
+                        if sig_id:
+                            seen_ids.append(sig_id)
+                        log.info(f"Alert sent: {r.pair} {r.direction} score={r.score}")
+                    else:
+                        log.warning(f"Alert send failed: {r.pair} {r.direction} — will retry")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 log.error(f"Alert forwarder error: {e}", exc_info=True)
             await asyncio.sleep(5)
 
-    # ─── daily counters (IST 09:00 reset) ────────────────────────
+    # ─── daily counters (IST 09:00 reset) — BUG-15 fix: consistent IST ──
     def _ist_today_start(self) -> datetime:
+        """9 AM IST today as a naive IST datetime."""
         now_ist = datetime.utcnow() + timedelta(hours=IST_OFFSET_HOURS)
         return now_ist.replace(hour=9, minute=0, second=0, microsecond=0)
 
+    def _ist_cutoff_iso(self) -> str:
+        """Return IST 9 AM cutoff as ISO string for DB comparison."""
+        return self._ist_today_start().isoformat()
+
     def today_signal_count(self) -> int:
-        cutoff = self._ist_today_start() - timedelta(hours=IST_OFFSET_HOURS)
-        cutoff_iso = cutoff.isoformat()
+        cutoff_iso = self._ist_cutoff_iso()
         sigs = get_signals_since(None, hours=24)
         return len([s for s in sigs if s["timestamp"] >= cutoff_iso])
 
     def today_trade_count(self) -> int:
+        cutoff_iso = self._ist_cutoff_iso()
         trades = get_trades_since(hours=24)
-        cutoff = self._ist_today_start() - timedelta(hours=IST_OFFSET_HOURS)
-        cutoff_iso = cutoff.isoformat()
         return len([t for t in trades if t["timestamp"] >= cutoff_iso])
 
     def today_result_count(self, result: str) -> int:
+        cutoff_iso = self._ist_cutoff_iso()
         trades = get_trades_since(hours=24)
-        cutoff = self._ist_today_start() - timedelta(hours=IST_OFFSET_HOURS)
-        cutoff_iso = cutoff.isoformat()
         return len([t for t in trades
                     if t.get("result") == result
                     and t["timestamp"] >= cutoff_iso])
