@@ -46,16 +46,13 @@ class EtfFlowStrategy(BaseStrategy):
         else:
             return None
 
-        # ─── Session window check ──────────────────────────────
-        # Only fire within ±60 min of US session open (7 PM IST = 13:30 UTC)
-        now_ist = datetime.now(timezone.utc) + timedelta(hours=5.5)
-        in_session_window = abs(
-            (now_ist.hour * 60 + now_ist.minute) -
-            (ETF_US_SESSION_IST_HOUR * 60)
-        ) <= 60 or abs(
-            (now_ist.hour * 60 + now_ist.minute) -
-            (ETF_US_SESSION_IST_HOUR * 60 - 24 * 60)
-        ) <= 60
+        # ─── Session window check (BUG-05 fix: proper wrap-around) ──
+        now_ist   = datetime.now(timezone.utc) + timedelta(hours=5.5)
+        now_min   = now_ist.hour * 60 + now_ist.minute
+        target_min = ETF_US_SESSION_IST_HOUR * 60
+        diff = (now_min - target_min) % (24 * 60)
+        diff = min(diff, 24 * 60 - diff)   # shortest angular distance
+        in_session_window = diff <= 60
         if not in_session_window:
             return None
 
