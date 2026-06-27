@@ -257,6 +257,9 @@ async def _post_init(app: Application) -> None:
     bot = KavachBot()
     await bot.start()
     app.bot_data["kavach"] = bot
+    # Give coinglass_feed access to the WS bus for liquidation data
+    from data import coinglass_feed as _cf
+    _cf.set_bus(bot.bus)
     log.info(f"{BOT_NAME} ready — polling started")
 
 
