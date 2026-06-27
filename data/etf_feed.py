@@ -134,7 +134,7 @@ async def _try_all_farside_urls() -> dict[str, Any] | None:
             "User-Agent":      ua,
             "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": "gzip, deflate",   # NO brotli — aiohttp can't decode br without Brotli package
             "Connection":      "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Cache-Control":   "no-cache",
