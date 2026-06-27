@@ -79,12 +79,13 @@ def mark_result(trade_id: int, result: str, exit_price: float | None = None,
 
     entry = trade["entry_price"]
     direction = trade["direction"]
+    leverage = trade.get("leverage", 5)   # BUG-16 fix: default 5x
     if direction == "LONG":
-        pnl_pct = ((exit_price - entry) / entry) * 100
+        raw_pct = ((exit_price - entry) / entry) * 100
     else:
-        pnl_pct = ((entry - exit_price) / entry) * 100
-    # Subtract maker fee ×2 (~0.05%)
-    pnl_pct -= 0.05
+        raw_pct = ((entry - exit_price) / entry) * 100
+    # BUG-16 fix: apply leverage, subtract fees (0.05% × 2 sides × leverage)
+    pnl_pct = raw_pct * leverage - 0.05 * leverage
 
     if hold_minutes is None:
         # Estimate from timestamp
@@ -120,11 +121,12 @@ def close_trade(trade_id: int, exit_price: float) -> dict[str, Any]:
         return {"error": f"Trade #{trade_id} not found"}
     entry = trade["entry_price"]
     direction = trade["direction"]
+    leverage = trade.get("leverage", 5)   # BUG-16 fix
     if direction == "LONG":
-        pnl_pct = ((exit_price - entry) / entry) * 100
+        raw_pct = ((exit_price - entry) / entry) * 100
     else:
-        pnl_pct = ((entry - exit_price) / entry) * 100
-    pnl_pct -= 0.05
+        raw_pct = ((entry - exit_price) / entry) * 100
+    pnl_pct = raw_pct * leverage - 0.05 * leverage
 
     # Determine result based on exit vs target/stop
     if direction == "LONG":
