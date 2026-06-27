@@ -81,7 +81,9 @@ class FundingFadeStrategy(BaseStrategy):
         # so the strategy still scores high when extreme funding is detected.
         score = sum(SCORE_WEIGHTS[k] for k, v in conditions.items() if v)
         # Bonus: extreme funding itself contributes 30 (same weight as cvd_divergence)
-        if abs(rate_pct) >= FUNDING_HIGH_THRESHOLD:
+        if direction == "SHORT" and rate_pct >= FUNDING_HIGH_THRESHOLD:
+            score += 30
+        elif direction == "LONG" and rate_pct <= FUNDING_LOW_THRESHOLD:
             score += 30
         score = min(100, score)
 
