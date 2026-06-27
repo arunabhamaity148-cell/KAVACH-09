@@ -79,12 +79,13 @@ class SignalEngine:
         return self._scan_count
 
     # ─── one-shot scan ──────────────────────────────────────────
-    async def scan_once(self, only_pair: str | None = None) -> list[StrategyResult]:
+    async def scan_once(self, only_pair: str | None = None, min_score: int | None = None) -> list[StrategyResult]:
         """
         Run all strategies across all pairs (or one pair).
         Returns list of StrategyResult that pass minimum score threshold.
         """
         from config import SCORE_MIN
+        threshold = min_score if min_score is not None else SCORE_MIN
         pairs = [p for p in PAIRS if not only_pair or p.symbol == only_pair]
         if not pairs and only_pair:
             return []
@@ -124,11 +125,11 @@ class SignalEngine:
                 except Exception as e:
                     log.warning(f"{strat.key} on {pair.symbol} evaluate() crashed: {e}", exc_info=True)
                     continue
-                if r and r.score >= SCORE_MIN:
+                if r and r.score >= threshold:
                     results.append(r)
                     log.info(f"✅ Signal: {pair.symbol} {r.direction} score={r.score} strategy={strat.key}")
                 elif r:
-                    log.debug(f"{strat.key} on {pair.symbol}: score {r.score} < SCORE_MIN {SCORE_MIN} — skipped")
+                    log.debug(f"{strat.key} on {pair.symbol}: score {r.score} < threshold {threshold} — skipped")
                 else:
                     log.debug(f"{strat.key} on {pair.symbol}: returned None (conditions not met)")
 
@@ -143,8 +144,9 @@ class SignalEngine:
             seen.add(key)
             deduped.append(r)
 
-        # ─── Stash latest per pair ──────────────────────────────
+        # ─── Stash latest per pair (stamp with creation time) ──────
         for r in deduped:
+            r.extra["_created_ts"] = time.time()
             self._latest[r.pair] = r
 
         # ─── Persist every signal to DB ─────────────────────────
@@ -222,8 +224,13 @@ class SignalEngine:
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
     # ─── public read API ───────────────────────────────────────
-    def latest_signals(self) -> list[StrategyResult]:
-        return list(self._latest.values())
+    def latest_signals(self, max_age_seconds: int = 900) -> list[StrategyResult]:
+        """Return signals newer than max_age_seconds (default 15 min)."""
+        now = time.time()
+        return [
+            r for r in self._latest.values()
+            if now - r.extra.get("_created_ts", 0) < max_age_seconds
+        ]
 
     def latest_for(self, pair: str) -> StrategyResult | None:
         return self._latest.get(pair)
@@ -233,7 +240,8 @@ class SignalEngine:
         key = (pair, direction)
         last = self._last_alert_ts.get(key, 0)
         now = time.time()
-        if now - last < ALERT_COOLDOWN_MINUTES * 60:
-            return False
-        self._last_alert_ts[key] = now
-        return True
+        return (now - last) >= ALERT_COOLDOWN_MINUTES * 60
+
+    def mark_alerted(self, pair: str, direction: str) -> None:
+        """Called ONLY after a successful Telegram send."""
+        self._last_alert_ts[(pair, direction)] = time.time()
