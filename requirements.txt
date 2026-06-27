@@ -21,5 +21,9 @@ google-generativeai==0.7.2
 # HTTP requests (sync, used by some scrapers)
 requests==2.32.3
 
+# HTML scraping — Farside ETF data (BUG-005 fix)
+beautifulsoup4==4.12.3
+lxml==5.2.2
+
 # Optional: Bayesian optimization (if used)
 # optuna==3.6.1
