@@ -59,19 +59,21 @@ async def verify_manual_idea(pair_str: str, direction: str) -> dict[str, Any]:
         price_hh = last6[-1]["low"] <= min(c["low"] for c in last6[:-1])
         price_str = f"${last6[-1]['low']:.2f} vs ${min(c['low'] for c in last6[:-1]):.2f}"
 
-    # 2. CVD divergence (split trades into 3 buckets by time)
+    # 2. CVD divergence — BUG-20 fix: use tape-level CVD matching S1 strategy
     trades_sorted = sorted(trades, key=lambda t: t.get("time", 0))
-    if len(trades_sorted) >= 30:
-        n = len(trades_sorted) // 3
-        b1, b2, b3 = trades_sorted[:n], trades_sorted[n:2*n], trades_sorted[2*n:]
-        cvd1, cvd2, cvd3 = calculate_cvd(b1), calculate_cvd(b2), calculate_cvd(b3)
+    if len(trades_sorted) >= 10:
+        tape_cvd  = calculate_cvd(trades_sorted)
+        tape_buy  = sum(float(t.get("volume", 0)) for t in trades_sorted if t.get("side") == "buy")
+        tape_sell = sum(float(t.get("volume", 0)) for t in trades_sorted if t.get("side") == "sell")
+        total_vol = tape_buy + tape_sell
+        cvd_bias  = tape_cvd / total_vol if total_vol > 0 else 0
         if direction == "SHORT":
-            cvd_lh = cvd3 < cvd2    # cvd lower high while price higher high
+            cvd_lh = cvd_bias < -0.05   # net bearish divergence
         else:
-            cvd_lh = cvd3 > cvd2
-        cvd_str = f"{cvd3:.0f} vs {cvd2:.0f}"
+            cvd_lh = cvd_bias > 0.05    # net bullish divergence
+        cvd_str = f"{cvd_bias:+.3f} (net {'sell' if cvd_bias < 0 else 'buy'})"
     else:
-        cvd_lh = False
+        cvd_lh  = False
         cvd_str = "insufficient trade data"
 
     # 3. Volume declining
