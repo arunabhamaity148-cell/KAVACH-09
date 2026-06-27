@@ -129,14 +129,14 @@ async def cmd_open(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             pnl_pct = ((t["entry_price"] - live) / t["entry_price"]) * 100
         pnl_pct -= 0.05   # fees
-        combined_unrealized += pnl_pct * 100   # just a sum of %s as a rough indicator
+        combined_unrealized += pnl_pct   # BUG-17 fix: was incorrectly × 100
         direction_emoji = "🟢" if pnl_pct >= 0 else "🔴"
         lines.append(
             f"#{t['id']} {t['pair']} {t['direction']} ${t['entry_price']:,.2f}\n"
             f"    Stop: ${t['stop_price']:,.2f} | Target: ${t['target_price']:,.2f}\n"
             f"    Current: ${live:,.2f} ({pnl_pct:+.2f}%) {direction_emoji}"
         )
-    lines.append(f"\n{len(trades)} open trades | Combined unrealized: {combined_unrealized/100:+.2f}%")
+    lines.append(f"\n{len(trades)} open trades | Combined unrealized: {combined_unrealized:+.2f}%")
     await update.message.reply_text("\n".join(lines))
 
 
