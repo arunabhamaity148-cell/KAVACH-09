@@ -55,13 +55,19 @@ class CvdDivergenceStrategy(BaseStrategy):
         if abs(price_move_pct) < CVD_MIN_PRICE_MOVE_PCT:
             return None   # price hasn't moved enough to form divergence
 
-        # Net CVD from the full trade tape
-        if trades:
-            tape_cvd = calculate_cvd(trades)
-            tape_buy  = sum(float(t.get("volume", 0)) for t in trades if t.get("side") == "buy")
-            tape_sell = sum(float(t.get("volume", 0)) for t in trades if t.get("side") == "sell")
+        # Net CVD from windowed tape — aligned with price-move window (BUG-03 fix)
+        import time as _time
+        window_ms = CVD_MIN_CANDLES * 5 * 60 * 1000   # same window as price move
+        cutoff_ts = _time.time() * 1000 - window_ms
+        windowed_trades = [t for t in trades if (t.get("time") or 0) >= cutoff_ts]
+        working_trades  = windowed_trades if len(windowed_trades) >= 10 else trades
+
+        if working_trades:
+            tape_cvd = calculate_cvd(working_trades)
+            tape_buy  = sum(float(t.get("volume", 0)) for t in working_trades if t.get("side") == "buy")
+            tape_sell = sum(float(t.get("volume", 0)) for t in working_trades if t.get("side") == "sell")
             total_vol = tape_buy + tape_sell
-            cvd_bias  = tape_cvd / total_vol if total_vol > 0 else 0   # -1 to +1
+            cvd_bias  = tape_cvd / total_vol if total_vol > 0 else 0
         else:
             tape_cvd  = 0.0
             cvd_bias  = 0.0
