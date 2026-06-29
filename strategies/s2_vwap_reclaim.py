@@ -5,6 +5,10 @@ Entry: price dipped below VWAP then reclaims it (closes back above)
        on rising volume → LONG. Mirror for SHORT (price above VWAP,
        loses it, reclaims from below on rising volume).
 
+FIXED:
+  - Relaxed from exact 3-candle pattern to "recently below/above + reclaim"
+  - Allows 1-3 candles below/above VWAP before reclaim
+
 Stop:   just beyond the swing low/high that preceded the reclaim
 Target: 1.5 × ATR or 0.5% from entry (whichever is greater)
 """
@@ -29,37 +33,40 @@ class VwapReclaimStrategy(BaseStrategy):
         if vwap == 0:
             return None
 
-        # Last 3 candles — detect reclaim
-        c0, c1, c2 = candles[-3], candles[-2], candles[-1]
-        price = c2["close"]
+        # Check last 5 candles for reclaim pattern
+        recent = candles[-5:]
+        price = recent[-1]["close"]
 
-        # LONG reclaim: c0 closed below VWAP, c2 closes back above
-        long_reclaim  = c0["close"] < vwap and c1["close"] < vwap and c2["close"] > vwap
-        short_reclaim = c0["close"] > vwap and c1["close"] > vwap and c2["close"] < vwap
+        # LONG reclaim: at least 1 candle closed below VWAP, then reclaims above
+        below_count = sum(1 for c in recent[:-1] if c["close"] < vwap)
+        above_count = sum(1 for c in recent[:-1] if c["close"] > vwap)
+        
+        long_reclaim  = below_count >= 1 and recent[-1]["close"] > vwap and recent[-2]["close"] < vwap
+        short_reclaim = above_count >= 1 and recent[-1]["close"] < vwap and recent[-2]["close"] > vwap
 
         if not (long_reclaim or short_reclaim):
             return None
 
         direction = "LONG" if long_reclaim else "SHORT"
 
-        # Volume check — use closed candles only (c2 may be in-progress)
-        closed = [c for c in candles[-4:] if c.get("closed", True)]
+        # Volume check — use closed candles only
+        closed = [c for c in candles[-6:] if c.get("closed", True)]
         if len(closed) >= 3:
             vols = [closed[-3]["volume"], closed[-2]["volume"], closed[-1]["volume"]]
         else:
-            vols = [c0["volume"], c1["volume"], c2["volume"]]
-        # BUG-12 fix: relaxed from strict 3-candle monotonic to just latest > prev
-        volume_rising = vols[2] > vols[1] and vols[2] > sum(vols) / 3
+            vols = [recent[-3]["volume"], recent[-2]["volume"], recent[-1]["volume"]]
+        
+        volume_rising = vols[-1] > vols[-2]  # FIX: just need latest > previous
         avg_vol = sum(c["volume"] for c in candles[-20:]) / 20
-        volume_strong = vols[2] > avg_vol
+        volume_strong = vols[-1] > avg_vol * 0.8  # FIX: relaxed from > avg to > 0.8*avg
 
         # Price structure confirmation
         if direction == "LONG":
-            swing = min(c0["low"], c1["low"])
-            price_structure = c2["close"] > c1["close"]
+            swing = min(c["low"] for c in recent[:-1])
+            price_structure = recent[-1]["close"] > recent[-2]["close"]
         else:
-            swing = max(c0["high"], c1["high"])
-            price_structure = c2["close"] < c1["close"]
+            swing = max(c["high"] for c in recent[:-1])
+            price_structure = recent[-1]["close"] < recent[-2]["close"]
 
         # Funding neutral check
         funding = context.get("funding", {}).get(pair.symbol, {})
@@ -97,7 +104,7 @@ class VwapReclaimStrategy(BaseStrategy):
 
         warnings: list[str] = []
         if not volume_strong:
-            warnings.append("Reclaim volume below 20-candle average — weak confirmation")
+            warnings.append("Reclaim volume below average — weak confirmation")
         if not funding_neutral:
             warnings.append(f"Funding rate {rate_pct:+.3f}% — elevated, fade risk")
 
