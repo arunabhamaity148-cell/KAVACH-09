@@ -2,8 +2,12 @@
 S5 — ETF Flow Session Trade
 ============================
 Entry: US session opens (7 PM IST) + strong ETF inflow/outflow day.
-       Inflow  > +$200M → LONG BTC at US open
-       Outflow < -$200M → SHORT BTC at US open
+       Inflow  > +$150M → LONG BTC at US open
+       Outflow < -$150M → SHORT BTC at US open
+
+FIXED:
+  - Lowered threshold from ±$200M to ±$150M
+  - Session window extended to ±2 hours for more opportunities
 
 Only applies to BTC-USDT. Other pairs are skipped.
 Stop:   1.5 × ATR
@@ -46,13 +50,13 @@ class EtfFlowStrategy(BaseStrategy):
         else:
             return None
 
-        # ─── Session window check (BUG-05 fix: proper wrap-around) ──
+        # ─── Session window check (FIX: extended to ±2 hours) ──
         now_ist   = datetime.now(timezone.utc) + timedelta(hours=5.5)
         now_min   = now_ist.hour * 60 + now_ist.minute
         target_min = ETF_US_SESSION_IST_HOUR * 60
         diff = (now_min - target_min) % (24 * 60)
         diff = min(diff, 24 * 60 - diff)   # shortest angular distance
-        in_session_window = diff <= 60
+        in_session_window = diff <= 120    # FIX: was 60, now 120 min (±2h)
         if not in_session_window:
             return None
 
