@@ -1,9 +1,13 @@
 """
 S3 — Funding Rate Extreme Fade
 ===============================
-Entry: funding rate at extreme (+0.05% or -0.02%) → fade the crowd.
+Entry: funding rate at extreme (+0.03% or -0.01%) → fade the crowd.
        Funding high → too many longs → SHORT.
        Funding low  → too many shorts → LONG.
+
+FIXED:
+  - Lowered thresholds from 0.05%/-0.02% to 0.03%/-0.01%
+  - More frequent signals in normal market conditions
 
 Stop:   1.5 × ATR
 Target: 0.5 × ATR past VWAP toward mean
@@ -78,7 +82,6 @@ class FundingFadeStrategy(BaseStrategy):
             "funding_neutral":  False,         # extreme = trigger, not neutral
         }
         # Override funding_neutral weight with the actual trigger strength
-        # so the strategy still scores high when extreme funding is detected.
         score = sum(SCORE_WEIGHTS[k] for k, v in conditions.items() if v)
         # Bonus: extreme funding itself contributes 30 (same weight as cvd_divergence)
         if direction == "SHORT" and rate_pct >= FUNDING_HIGH_THRESHOLD:
@@ -103,9 +106,9 @@ class FundingFadeStrategy(BaseStrategy):
             return None
 
         warnings = []
-        if rate_pct > 0.10:
+        if rate_pct > 0.06:
             warnings.append(f"⚠️ Funding extremely high ({rate_pct:+.3f}%) — squeeze risk")
-        if rate_pct < -0.05:
+        if rate_pct < -0.03:
             warnings.append(f"⚠️ Funding very negative ({rate_pct:+.3f}%) — short squeeze risk")
 
         return StrategyResult(
