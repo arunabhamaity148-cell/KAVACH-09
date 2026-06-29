@@ -4,13 +4,11 @@ S1 — CVD Divergence Scalp
 Entry: bearish divergence (price ↑, CVD ↓) → SHORT
        bullish divergence (price ↓, CVD ↑) → LONG
 
-ISSUE 6 FIX:
-  Old approach bucketed trades into candles, but REST trades only cover
-  last 15 min → only 3 candles get CVD data, rest are 0 → divergence
-  detector always sees flat CVD → NO_DIVERGENCE.
-
-  New approach: compute total tape CVD and compare against price move
-  over the same window. Simpler, reliable, no bucketing needed.
+FIXED:
+  - Lowered divergence threshold from 15% to 8%
+  - Lowered price move threshold from 0.30% to 0.15%
+  - Added fallback: if trades empty, use candle volume as proxy
+  - Fixed window alignment: price move and CVD use same window
 
 Stop:   1.5 × ATR(14) on 5m
 Target: VWAP (mean-reversion scalp)
@@ -39,13 +37,10 @@ class CvdDivergenceStrategy(BaseStrategy):
         if len(candles) < 15:
             return None
 
-        # ─── 1. ISSUE 6 FIX: tape-level CVD vs price move ──────
-        # Use total tape CVD (net buy − sell) vs price direction.
-        # Works even when trades only cover last 15 min (3 candles).
+        # ─── 1. Price direction over the window ─────────────────
         last_n = candles[-15:]
         prices = [c["close"] for c in last_n]
 
-        # Price direction over the window
         p_now  = prices[-1]
         p_prev = prices[-CVD_MIN_CANDLES - 1]   # 4 candles back
         if p_prev == 0:
@@ -53,35 +48,53 @@ class CvdDivergenceStrategy(BaseStrategy):
         price_move_pct = ((p_now - p_prev) / p_prev) * 100
 
         if abs(price_move_pct) < CVD_MIN_PRICE_MOVE_PCT:
-            return None   # price hasn't moved enough to form divergence
+            return None   # price hasn't moved enough
 
-        # Net CVD from windowed tape — aligned with price-move window (BUG-03 fix)
+        # ─── 2. CVD calculation — with fallback ─────────────────
         import time as _time
-        window_ms = CVD_MIN_CANDLES * 5 * 60 * 1000   # same window as price move
+        
+        # Try tape trades first
+        window_ms = CVD_MIN_CANDLES * 5 * 60 * 1000
         cutoff_ts = _time.time() * 1000 - window_ms
         windowed_trades = [t for t in trades if (t.get("time") or 0) >= cutoff_ts]
         working_trades  = windowed_trades if len(windowed_trades) >= 10 else trades
 
-        if working_trades:
+        if working_trades and len(working_trades) >= 5:
+            # Real tape CVD
             tape_cvd = calculate_cvd(working_trades)
             tape_buy  = sum(float(t.get("volume", 0)) for t in working_trades if t.get("side") == "buy")
             tape_sell = sum(float(t.get("volume", 0)) for t in working_trades if t.get("side") == "sell")
             total_vol = tape_buy + tape_sell
             cvd_bias  = tape_cvd / total_vol if total_vol > 0 else 0
+            cvd_source = "tape"
         else:
-            tape_cvd  = 0.0
-            cvd_bias  = 0.0
+            # FALLBACK: use candle volume as proxy CVD
+            # Estimate: if close > open = buy pressure, else sell pressure
+            proxy_cvd = 0.0
+            proxy_vol = 0.0
+            for c in last_n[-CVD_MIN_CANDLES:]:
+                vol = c["volume"]
+                proxy_vol += vol
+                if c["close"] > c["open"]:
+                    proxy_cvd += vol * 0.6   # 60% buy estimate
+                elif c["close"] < c["open"]:
+                    proxy_cvd -= vol * 0.6   # 60% sell estimate
+            cvd_bias = proxy_cvd / proxy_vol if proxy_vol > 0 else 0
+            cvd_source = "candle_proxy"
 
-        # Divergence: price up but CVD net negative → bearish divergence
-        # Divergence: price down but CVD net positive → bullish divergence
-        if price_move_pct > 0 and cvd_bias < -(CVD_MIN_DIVERGENCE_PCT / 100):
+        # ─── 3. Divergence detection ──────────────────────────
+        # Bearish divergence: price up but CVD net negative
+        # Bullish divergence: price down but CVD net positive
+        div_threshold = CVD_MIN_DIVERGENCE_PCT / 100  # 0.08
+        
+        if price_move_pct > 0 and cvd_bias < -div_threshold:
             direction = "SHORT"
-        elif price_move_pct < 0 and cvd_bias > (CVD_MIN_DIVERGENCE_PCT / 100):
+        elif price_move_pct < 0 and cvd_bias > div_threshold:
             direction = "LONG"
         else:
             return None
 
-        # ─── 2. Conditions check ────────────────────────────────
+        # ─── 4. Conditions check ────────────────────────────────
         vols = [c["volume"] for c in last_n]
         avg_vol    = sum(vols[:-3]) / max(len(vols[:-3]), 1)
         recent_vol = sum(vols[-3:]) / 3
@@ -111,7 +124,7 @@ class CvdDivergenceStrategy(BaseStrategy):
             funding_neutral = rate_pct > FUNDING_NEUTRAL_LOW
 
         conditions = {
-            "cvd_divergence":   True,              # core signal — always met at this point
+            "cvd_divergence":   True,              # core signal — always met
             "vwap_extended":    vwap_extended,
             "volume_declining": volume_declining,
             "price_structure":  price_structure,
@@ -119,7 +132,7 @@ class CvdDivergenceStrategy(BaseStrategy):
         }
         score = sum(SCORE_WEIGHTS[k] for k, v in conditions.items() if v)
 
-        # ─── 3. Levels ──────────────────────────────────────────
+        # ─── 5. Levels ──────────────────────────────────────────
         atr       = calculate_atr(candles, 14)
         stop_dist = max(atr * ATR_STOP_MULTIPLIER, price * 0.0015)
 
@@ -146,6 +159,8 @@ class CvdDivergenceStrategy(BaseStrategy):
             warnings.append(f"BTC 15m trend: {btc_trend.get('change_pct', 0):+.2f}% bearish — counter-trend risk")
         if not volume_declining:
             warnings.append("Volume not declining — momentum still strong")
+        if cvd_source == "candle_proxy":
+            warnings.append("CVD from candle proxy (trades unavailable) — verify on chart")
 
         return StrategyResult(
             strategy=self.name,
@@ -161,6 +176,7 @@ class CvdDivergenceStrategy(BaseStrategy):
             condition_details={
                 "price_move":    f"{price_move_pct:+.2f}% ({CVD_MIN_CANDLES} candles)",
                 "cvd_bias":      f"{cvd_bias:+.3f} (net {'buy' if cvd_bias > 0 else 'sell'})",
+                "cvd_source":    cvd_source,
                 "volume_vs_avg": f"{recent_vol:.0f} vs avg {avg_vol:.0f}",
                 "vwap_dev_pct":  f"{vwap_dev:+.2f}%",
                 "funding_rate":  f"{rate_pct:+.3f}%",
