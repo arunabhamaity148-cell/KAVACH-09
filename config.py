@@ -17,7 +17,7 @@ load_dotenv()
 # BOT IDENTITY
 # ────────────────────────────────────────────────────────────────────
 BOT_NAME    = "KAVACH-09"
-BOT_VERSION = "1.0.0"
+BOT_VERSION = "1.0.1"
 BOT_ROLE    = "Signal Intelligence Engine (manual trade only)"
 EXCHANGE    = "CoinDCX USDT Futures"
 
@@ -69,13 +69,13 @@ SESSION_RESET_UTC_HOUR = 0           # VWAP resets at 00:00 UTC = 05:30 IST
 
 
 # ────────────────────────────────────────────────────────────────────
-# STRATEGY THRESHOLDS
+# STRATEGY THRESHOLDS  (FIXED: relaxed for more frequent signals)
 # ────────────────────────────────────────────────────────────────────
 
 # CVD Divergence (S1)
 CVD_MIN_CANDLES         = 3
-CVD_MIN_PRICE_MOVE_PCT  = 0.30
-CVD_MIN_DIVERGENCE_PCT  = 15.0
+CVD_MIN_PRICE_MOVE_PCT  = 0.15       # FIX: was 0.30 — too strict
+CVD_MIN_DIVERGENCE_PCT  = 8.0        # FIX: was 15.0 — too strict
 CVD_MIN_VOLUME_PCT_AVG  = 80.0
 
 # VWAP Reclaim (S2)
@@ -83,18 +83,18 @@ VWAP_RECLAIM_MAX_DEV_PCT = 0.50      # price must be within 0.5% of VWAP
 VWAP_RECLAIM_MIN_DEV_PCT = 0.05      # not exactly on VWAP — must be reclaim
 
 # Funding Fade (S3)
-FUNDING_HIGH_THRESHOLD  = 0.050      # %  per 8h — short bias
-FUNDING_LOW_THRESHOLD   = -0.020     # %  per 8h — long bias
-FUNDING_NEUTRAL_HIGH    = 0.040      # warn above this for shorts
+FUNDING_HIGH_THRESHOLD  = 0.030        # FIX: was 0.050 — too extreme
+FUNDING_LOW_THRESHOLD   = -0.010     # FIX: was -0.020 — too extreme
+FUNDING_NEUTRAL_HIGH    = 0.040        # warn above this for shorts
 FUNDING_NEUTRAL_LOW     = -0.015     # warn below this for longs
 
 # Liquidation Cascade (S4)
-LIQ_CASCADE_THRESHOLD_USD = 300_000_000   # $300M in 1h triggers cascade
-LIQ_CASCADE_MIN_RATIO     = 0.70          # 70% one-sided liquidations
+LIQ_CASCADE_THRESHOLD_USD = 50_000_000   # FIX: was 300M — now 50M
+LIQ_CASCADE_MIN_RATIO     = 0.65          # FIX: was 0.70 — slightly relaxed
 
 # ETF Flow (S5)
-ETF_FLOW_BULLISH_USD   = 200_000_000     # +$200M = bullish
-ETF_FLOW_BEARISH_USD   = -200_000_000    # -$200M = bearish
+ETF_FLOW_BULLISH_USD   = 150_000_000     # FIX: was 200M — slightly relaxed
+ETF_FLOW_BEARISH_USD   = -150_000_000    # FIX: was -200M
 ETF_US_SESSION_IST_HOUR = 19              # 7 PM IST = US session open
 
 
@@ -112,7 +112,7 @@ SCORE_WEIGHTS: dict[str, int] = {
 SCORE_HIGH   = 90    # HIGH confidence
 SCORE_MEDIUM = 75    # MEDIUM confidence
 SCORE_LOW    = 60    # LOW confidence (warn)
-SCORE_MIN    = 60    # below this → no signal sent
+SCORE_MIN    = 50    # FIX: was 60 — allow more signals through
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ DB_PATH = os.getenv("KAVACH_DB_PATH", os.path.join(os.path.dirname(__file__), "k
 # ────────────────────────────────────────────────────────────────────
 # ALERT COOLDOWN — avoid spamming the same pair/direction
 # ────────────────────────────────────────────────────────────────────
-ALERT_COOLDOWN_MINUTES = 30
+ALERT_COOLDOWN_MINUTES = 15           # FIX: was 30 — shorter for more signals
 
 
 # ────────────────────────────────────────────────────────────────────
