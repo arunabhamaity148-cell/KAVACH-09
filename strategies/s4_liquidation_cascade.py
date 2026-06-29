@@ -1,11 +1,16 @@
 """
 S4 — Liquidation Cascade Mean Reversion
 ========================================
-Entry: total market liquidations > $300M in last hour AND
-       one-sided bias (≥70% on one side) → fade the cascade.
+Entry: total market liquidations > $50M in last hour AND
+       one-sided bias (≥65% on one side) → fade the cascade.
 
-If longs are getting liquidated (bias > 0.70), price has likely
-overshot down → LONG. If shorts are getting liquidated (bias < 0.30),
+FIXED:
+  - Lowered threshold from $300M to $50M
+  - Lowered bias ratio from 70% to 65%
+  - More frequent but still significant events
+
+If longs are getting liquidated (bias > 0.65), price has likely
+overshot down → LONG. If shorts are getting liquidated (bias < 0.35),
 price overshot up → SHORT.
 
 Stop:   2.0 × ATR (cascade volatility is high)
@@ -40,8 +45,8 @@ class LiquidationCascadeStrategy(BaseStrategy):
             return None
 
         bias = liq.get("bias_ratio", 0.5)
-        # bias > 0.70 → longs being liquidated → fade down → LONG
-        # bias < 0.30 → shorts being liquidated → fade up → SHORT
+        # bias > 0.65 → longs being liquidated → fade down → LONG
+        # bias < 0.35 → shorts being liquidated → fade up → SHORT
         if bias >= LIQ_CASCADE_MIN_RATIO:
             direction = "LONG"
         elif bias <= (1.0 - LIQ_CASCADE_MIN_RATIO):
