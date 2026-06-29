@@ -500,11 +500,14 @@ async def warm_start(bus: MarketFeedBus) -> None:
     async def _fill(p: Pair):
         c = await get_candles(p, bus.interval, CANDLE_HISTORY)
         if c:
-            # BUG-28 fix: merge with WS-populated candles instead of overwrite
+            # BUG-28 FIX: merge with WS-populated candles correctly
             existing    = bus._candles.get(p.binance, [])
             existing_ts = {x["timestamp"] for x in existing}
             new_only    = [x for x in c if x["timestamp"] not in existing_ts]
-            merged      = c + new_only   # REST history + any fresh WS candles
+            merged      = existing + new_only   # WS first, then REST backfill
+            merged.sort(key=lambda x: x["timestamp"])
+            if len(merged) > CANDLE_HISTORY:
+                merged = merged[-CANDLE_HISTORY:]
             bus._candles[p.binance]     = merged
             bus._last_prices[p.binance] = merged[-1]["close"]
             if len(merged) >= 14:
